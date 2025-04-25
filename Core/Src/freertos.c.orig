@@ -1,0 +1,553 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * File Name          : freertos.c
+  * Description        : Code for freertos applications
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2024 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "FreeRTOS.h"
+#include "task.h"
+#include "main.h"
+#include "cmsis_os.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "oled.h"
+#include "stdio.h"
+#include "motor.h"
+#include "niming.h"
+#include "pid.h"
+
+#include "cJSON.h"
+#include <string.h>
+#include "HC_SR04.h"
+
+
+
+#include "mpu6050.h"
+#include "inv_mpu.h"
+#include "inv_mpu_dmp_motion_driver.h" 
+
+#include "adc.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+extern short Encode1Count ;//电机1编码器计数值 short的类型
+extern short Encode2Count ;//电机2编码器计数值 short的类型
+extern float Motor1Speed ;//电机1速度 转/s
+extern float Motor2Speed ;//电机2速度 转/s
+extern uint16_t TimerCount ;//中断计数变量
+
+
+
+extern tPid pidMotor1Speed;//声明电机1PID速度控制结构体类型变量
+extern tPid pidMotor2Speed;
+extern tPid pidFollow;    //定距离跟随PID
+extern tPid pidMPU6050YawMovement;  //利用6050偏航角 进行姿态控制的PID
+extern uint8_t Usart1_ReadBuf[255];	//串口1 缓冲数组
+extern float p,i,d,a,b;//使用JSON时候使用的变量
+extern uint8_t OledString[50];//OLED显示使用的字符串数组
+extern float Mileage;//里程数
+
+extern tPid pidHW_Tracking;//红外循迹的PID
+extern tPid pidOpenmv_Tracking;//摄像头的PID
+
+extern uint8_t g_ucaHW_Read[4] ;//保存红外对管电平的数组
+extern int8_t g_cThisState ;//这次状态
+extern int8_t g_cLastState ; //上次状态
+extern float g_fHW_PID_Out;//红外对管PID计算输出速度
+extern float g_fHW_PID_Out1;//电机1的最后循迹PID控制速度
+extern float g_fHW_PID_Out2;//电机2的最后循迹PID控制速度
+
+extern uint8_t g_ucUsart3ReceiveData;  //保存串口三接收的数据
+extern uint8_t g_ucUsart2ReceiveData;  //保存串口二接收的数据
+
+extern uint8_t Usart3String[50];//串口三输出字符串使用的字符串数组
+extern float g_fHC_SR04_Read;//超声波传感器读取障碍物数据
+extern float g_fFollow_PID_Out;//定距离跟随PID计算输出速度
+
+
+extern float pitch,roll,yaw; //俯仰角 横滚角 航向角
+
+extern float  g_fMPU6050YawMovePidOut ; //姿态PID运算输出
+extern float  g_fMPU6050YawMovePidOut1 ; //第一个电机控制输出
+extern float  g_fMPU6050YawMovePidOut2 ; //第一个电机控制输出
+
+extern uint8_t g_ucMode; 
+
+extern int g_lHW_State;//帮助视觉调试 用于表示红外对管识别状态
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN Variables */
+
+/* USER CODE END Variables */
+osThreadId StopTaskHandle;
+osThreadId LedTaskHandle;
+osThreadId OledTaskHandle;
+osThreadId MultiModeTaskHandle;
+osMessageQId myQueueModeHandle;
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+
+/* USER CODE END FunctionPrototypes */
+
+void StartStopTask(void const * argument);
+void StartLedTask(void const * argument);
+void StartOledTask(void const * argument);
+void StartMultiModeTask(void const * argument);
+
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/* GetIdleTaskMemory prototype (linked to static allocation support) */
+void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize );
+
+/* USER CODE BEGIN GET_IDLE_TASK_MEMORY */
+static StaticTask_t xIdleTaskTCBBuffer;
+static StackType_t xIdleStack[configMINIMAL_STACK_SIZE];
+
+void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize )
+{
+  *ppxIdleTaskTCBBuffer = &xIdleTaskTCBBuffer;
+  *ppxIdleTaskStackBuffer = &xIdleStack[0];
+  *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+  /* place for user code */
+}
+/* USER CODE END GET_IDLE_TASK_MEMORY */
+
+/**
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* definition and creation of myQueueMode */
+  osMessageQDef(myQueueMode, 1, uint8_t);
+  myQueueModeHandle = osMessageCreate(osMessageQ(myQueueMode), NULL);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* definition and creation of StopTask */
+  osThreadDef(StopTask, StartStopTask, osPriorityHigh, 0, 128);
+  StopTaskHandle = osThreadCreate(osThread(StopTask), NULL);
+
+  /* definition and creation of LedTask */
+  osThreadDef(LedTask, StartLedTask, osPriorityNormal, 0, 128);
+  LedTaskHandle = osThreadCreate(osThread(LedTask), NULL);
+
+  /* definition and creation of OledTask */
+  osThreadDef(OledTask, StartOledTask, osPriorityNormal, 0, 128);
+  OledTaskHandle = osThreadCreate(osThread(OledTask), NULL);
+
+  /* definition and creation of MultiModeTask */
+  osThreadDef(MultiModeTask, StartMultiModeTask, osPriorityAboveNormal, 0, 128);
+  MultiModeTaskHandle = osThreadCreate(osThread(MultiModeTask), NULL);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+}
+
+/* USER CODE BEGIN Header_StartStopTask */
+/**
+  * @brief  Function implementing the StopTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartStopTask */
+void StartStopTask(void const * argument)
+{
+	
+  /* USER CODE BEGIN StartStopTask */
+		uint8_t receivedMode;  // 定义临时变量 用来存储读取到的当前模式
+  /* Infinite loop */
+  for(;;)
+  {
+//		UBaseType_t stackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);// 获取当前任务的栈高水位值
+//		printf("StartStopTask Mark: %u words\n", (unsigned int)stackHighWaterMark);
+//		size_t freeHeapSize = xPortGetFreeHeapSize();// 获取系统的可用堆空间
+//		printf("StartStopTask Free Heap Size: %u bytes\n", (unsigned int)freeHeapSize);
+    
+		 // xQueuePeek从队列查看数据 但是不将数据移除。
+		//不等待队列中的数据，队列为空 则赋值receivedMode 为零
+		if (xQueuePeek(myQueueModeHandle, &receivedMode, 0) == errQUEUE_EMPTY)
+		{
+			receivedMode = 0; //返回errQUEUE_EMPTY 表示 消息队列为空 赋值receivedMode 为零
+		}
+		if(receivedMode == 0)//如果当前模式为0 则设置小车速度为零
+		{
+			motorPidSetSpeed(0,0);			
+		}
+		
+	
+		osDelay(10);
+  }
+  /* USER CODE END StartStopTask */
+}
+
+/* USER CODE BEGIN Header_StartLedTask */
+/**
+* @brief Function implementing the LedTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartLedTask */
+void StartLedTask(void const * argument)
+{
+  /* USER CODE BEGIN StartLedTask */
+  /* Infinite loop */
+  for(;;)
+  {
+//		UBaseType_t stackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);// 获取当前任务的栈高水位值
+//		printf("StartLedTask Mark: %u words\n", (unsigned int)stackHighWaterMark);
+//		size_t freeHeapSize = xPortGetFreeHeapSize();// 获取系统的可用堆空间
+//		printf("StartLedTask Free Heap Size: %u bytes\n", (unsigned int)freeHeapSize);
+		
+		
+		HAL_GPIO_TogglePin(LED_GPIO_Port,LED_Pin);  //切换LED GPIO状态
+    osDelay(300);
+  }
+  /* USER CODE END StartLedTask */
+}
+
+/* USER CODE BEGIN Header_StartOledTask */
+/**
+* @brief Function implementing the OledTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartOledTask */
+void StartOledTask(void const * argument)
+{
+  /* USER CODE BEGIN StartOledTask */
+	
+		uint8_t readMode;  // 定义临时变量 用来存储读取到的当前模式
+	
+  /* Infinite loop */
+  for(;;)
+  {
+		
+		// xQueuePeek从队列读取数据，且不将数据移除
+		//不等待队列中的数据，队列为空时立即返回
+		//如果队列为空 则赋值当前模式receivedMode 为 0
+		if (xQueuePeek(myQueueModeHandle, &readMode, 0) == errQUEUE_EMPTY)
+		{
+			readMode = 0;   //如果返回errQUEUE_EMPTY 就是消息队列为空就赋值 readMode = 0
+		}
+		
+//		UBaseType_t stackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);// 获取当前任务的栈高水位值
+//		printf("StartOledTask Mark: %u words\n", (unsigned int)stackHighWaterMark);
+//		size_t freeHeapSize = xPortGetFreeHeapSize();// 获取系统的可用堆空间
+//		printf("StartOledTask Free Heap Size: %u bytes\n", (unsigned int)freeHeapSize);
+		
+		sprintf((char *)OledString," g_ucMode:%d",readMode);//显示g_ucMode 当前模式
+		OLED_ShowString(0,6,OledString,12);	//显示在OLED上
+		
+		sprintf((char*)OledString, "lHW:%d  ", g_lHW_State);//视觉识别结果
+		OLED_ShowString(0,7,OledString,12);//
+		
+		
+		sprintf((char *)Usart3String," g_ucMode:%d",readMode);//蓝牙APP显示
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+			
+		
+	//0LED显示功能
+		sprintf((char*)OledString, "V1:%.2fV2:%.2f", Motor1Speed,Motor2Speed);//显示速度
+		OLED_ShowString(0,0,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+		sprintf((char*)OledString, "Mileage:%.2f", Mileage);//显示里程
+		OLED_ShowString(0,1,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+		sprintf((char*)OledString, "U:%.2fV", adcGetBatteryVoltage());//显示电池电压
+		OLED_ShowString(0,2,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+		sprintf((char *)OledString,"HC_SR04:%.2fcm\r\n",HC_SR04_Read());//显示超声波数据
+		OLED_ShowString(0,3,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+		sprintf((char *)OledString,"p:%.2f r:%.2f \r\n",pitch,roll);//显示6050数据 俯仰角 横滚角
+		OLED_ShowString(0,4,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+		sprintf((char *)OledString,"y:%.2f  \r\n",yaw);//显示6050数据  航向角
+		OLED_ShowString(0,5,OledString,12);//这个是oled驱动里面的，是显示位置的一个函数，
+		
+	//蓝牙APP显示
+		sprintf((char*)Usart3String, "V1:%.2fV2:%.2f", Motor1Speed,Motor2Speed);//显示速度
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+		//阻塞方式发送可以保证数据发送完毕，中断发送不一定可以保证数据已经发送完毕才启动下一次发送
+		sprintf((char*)Usart3String, "Mileage:%.2f", Mileage);//显示里程
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+		
+		sprintf((char*)Usart3String, "U:%.2fV", adcGetBatteryVoltage());//显示电池电压
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+		
+		sprintf((char *)Usart3String,"HC_SR04:%.2fcm\r\n",HC_SR04_Read());//显示超声波数据
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+		
+		sprintf((char *)Usart3String,"p:%.2f r:%.2f \r\n",pitch,roll);//显示6050数据 俯仰角 横滚角
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+		
+		sprintf((char *)Usart3String,"y:%.2f  \r\n",yaw);//显示6050数据  航向角
+		HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);//阻塞式发送通过串口三输出字符 strlen:计算字符串大小
+	
+		//获得6050数据
+//		while(mpu_dmp_get_data(&pitch,&roll,&yaw)!=0){}  //这个可以解决经常读不出数据的问题
+		
+		for(uint8_t i = 0; i < 20 ; i++)
+		{
+			if(mpu_dmp_get_data(&pitch,&roll,&yaw) == 0)//获得MPU6050数据成功
+			{
+				printf("mpu_dmp_get_data() Data for success\n");//串口1 输出数据获取成功 注意！ 这个要写再串口1初始化之后		
+			  break;
+			}
+						
+			if(i == 20-1 )//i已经等于(20-1)次 还没有退出循环说明 说明输出读取失败
+			{
+				printf("mpu_dmp_get_data()  Data acquisition failure\n");//串口1 输出数据获取失败 注意！ 这个要写再串口1初始化之后	
+			}
+		}
+		
+		//在显示模式电机停转 设置小车速度为0
+		//motorPidSetSpeed(0,0);		
+		
+    osDelay(10);
+  }
+  /* USER CODE END StartOledTask */
+}
+
+/* USER CODE BEGIN Header_StartMultiModeTask */
+/**
+* @brief Function implementing the MultiModeTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMultiModeTask */
+void StartMultiModeTask(void const * argument)
+{
+  /* USER CODE BEGIN StartMultiModeTask */
+	
+	uint8_t readMode;  // 定义临时变量 用来存储读取到的当前模式	
+	
+  /* Infinite loop */
+  for(;;)
+  {
+//		UBaseType_t stackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);// 获取当前任务的栈高水位值
+//		printf("StartMultiModeTask Mark: %u words\n", (unsigned int)stackHighWaterMark);
+//		size_t freeHeapSize = xPortGetFreeHeapSize();// 获取系统的可用堆空间
+//		printf("StartMultiModeTask Free Heap Size: %u bytes\n", (unsigned int)freeHeapSize);
+		
+		// xQueuePeek 从队列读取数据，且不将数据移除
+		//不等待队列中的数据，队列为空时立即返回
+		//如果队列为空则赋值 当前模式receivedMode 为 0
+		if (xQueuePeek(myQueueModeHandle, &readMode, 0) == errQUEUE_EMPTY)
+		{
+			readMode = 0;   //如果返回errQUEUE_EMPTY 就是消息队列为空就赋值 readMode = 0
+		}
+		
+		if(readMode == 1)
+		{
+		///****    红外PID循迹功能******************/
+		g_ucaHW_Read[0] = READ_HW_OUT_1;//读取红外对管状态、这样相比于写在if里面更高效
+		g_ucaHW_Read[1] = READ_HW_OUT_2;
+		g_ucaHW_Read[2] = READ_HW_OUT_3;
+		g_ucaHW_Read[3] = READ_HW_OUT_4;
+
+		if(g_ucaHW_Read[0] == 0&&g_ucaHW_Read[1] == 0&&g_ucaHW_Read[2] == 0&&g_ucaHW_Read[3] == 0 )
+		{
+	//		printf("应该前进\r\n");//注释掉更加高效，减少无必要程序执行
+			g_cThisState = 0;//前进
+		}
+		else if(g_ucaHW_Read[0] == 0&&g_ucaHW_Read[1] == 1&&g_ucaHW_Read[2] == 0&&g_ucaHW_Read[3] == 0 )//使用else if更加合理高效
+		{
+	//		printf("应该右转\r\n");
+			g_cThisState = -1;//应该右转
+		}
+		else if(g_ucaHW_Read[0] == 1&&g_ucaHW_Read[1] == 0&&g_ucaHW_Read[2] == 0&&g_ucaHW_Read[3] == 0 )
+		{
+	//		printf("快速右转\r\n");
+			g_cThisState = -2;//快速右转
+		}
+		else if(g_ucaHW_Read[0] == 1&&g_ucaHW_Read[1] == 1&&g_ucaHW_Read[2] == 0&&g_ucaHW_Read[3] == 0)
+		{
+	//		printf("快速右转\r\n");
+			g_cThisState = -3;//快速右转
+		}
+		else if(g_ucaHW_Read[0] == 0&&g_ucaHW_Read[1] == 0&&g_ucaHW_Read[2] == 1&&g_ucaHW_Read[3] == 0 )
+		{
+	//		printf("应该左转\r\n");
+			g_cThisState = 1;//应该左转	
+		}
+		else if(g_ucaHW_Read[0] == 0&&g_ucaHW_Read[1] == 0&&g_ucaHW_Read[2] == 0&&g_ucaHW_Read[3] == 1 )
+		{
+	//		printf("快速左转\r\n");
+			g_cThisState = 2;//快速左转
+		}
+		else if(g_ucaHW_Read[0] == 0&&g_ucaHW_Read[1] == 0&&g_ucaHW_Read[2] == 1&&g_ucaHW_Read[3] == 1)
+		{
+	//	    printf("快速左转\r\n");
+			g_cThisState = 3;//快速左转
+		}
+		g_fHW_PID_Out = PID_realize(&pidHW_Tracking,g_cThisState);//PID计算输出目标速度 这个速度，会和基础速度加减
+
+		g_fHW_PID_Out1 = 3 + g_fHW_PID_Out;//电机1速度=基础速度+循迹PID输出速度
+		g_fHW_PID_Out2 = 3 - g_fHW_PID_Out;//电机1速度=基础速度-循迹PID输出速度
+		if(g_fHW_PID_Out1 >5) g_fHW_PID_Out1 =5;//进行限幅 限幅速度在0-5之间
+		if(g_fHW_PID_Out1 <0) g_fHW_PID_Out1 =0;
+		if(g_fHW_PID_Out2 >5) g_fHW_PID_Out2 =5;//进行限幅 限幅速度在0-5之间
+		if(g_fHW_PID_Out2 <0) g_fHW_PID_Out2 =0;
+		if(g_cThisState != g_cLastState)//如何这次状态不等于上次状态、就进行改变目标速度和控制电机、在定时器中依旧定时控制电机
+		{
+			motorPidSetSpeed(g_fHW_PID_Out1,g_fHW_PID_Out2);//通过计算的速度控制电机
+		}
+		
+		g_cLastState = g_cThisState;//保存上次红外对管状态	
+
+		}
+		if(readMode == 2)
+		{
+			
+			//***************遥控模式***********************//
+			//遥控模式的控制在串口三的中断里面
+		}
+		if(readMode == 3)
+		{
+			
+	//避障逻辑
+			if(HC_SR04_Read() > 25)//前方无障碍物
+			{
+				motorPidSetSpeed(1,1);//前运动
+				osDelay(100);
+			}
+			else{	//前方有障碍物
+				motorPidSetSpeed(-1,1);//右边运动 原地	
+				osDelay(500);
+				if(HC_SR04_Read() > 25)//右边无障碍物
+				{
+					motorPidSetSpeed(1,1);//前运动
+					osDelay(100);
+				}
+				else{//右边有障碍物
+					motorPidSetSpeed(1,-1);//左边运动 原地
+					osDelay(1000);
+					if(HC_SR04_Read() >25)//左边无障碍物
+					{
+						 motorPidSetSpeed(1,1);//前运动
+						osDelay(100);
+					}
+					else{
+						motorPidSetSpeed(-1,-1);//后运动
+						osDelay(1000);
+						motorPidSetSpeed(-1,1);//右边运动
+						osDelay(50);
+					}
+				}
+			}
+		}
+		if(readMode == 4)
+		{
+		//**********PID跟随功能***********//
+			g_fHC_SR04_Read=HC_SR04_Read();//读取前方障碍物距离
+			if(g_fHC_SR04_Read < 60){  //如果前60cm 有东西就启动跟随
+				g_fFollow_PID_Out = PID_realize(&pidFollow,g_fHC_SR04_Read);//PID计算输出目标速度 这个速度，会和基础速度加减
+				if(g_fFollow_PID_Out > 6) g_fFollow_PID_Out = 6;//对输出速度限幅
+				if(g_fFollow_PID_Out < -6) g_fFollow_PID_Out = -6;
+				motorPidSetSpeed(g_fFollow_PID_Out,g_fFollow_PID_Out);//速度作用与电机上
+			}
+			else motorPidSetSpeed(0,0);//如果前面60cm 没有东西就停止
+			osDelay(10);//读取超声波传感器不能过快
+		}
+		if(readMode == 5)
+		{
+		//*************MPU6050航向角 PID转向控制*****************//
+
+			sprintf((char *)Usart3String,"pitch:%.2f roll:%.2f yaw:%.2f\r\n",pitch,roll,yaw);//显示6050数据 俯仰角 横滚角 航向角
+			HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),0xFFFF);//通过串口三输出字符 strlen:计算字符串大小	
+			 
+
+		for(uint8_t i = 0; i < 20 ; i++)
+		{
+			if(mpu_dmp_get_data(&pitch,&roll,&yaw) == 0)//获得MPU6050数据成功
+			{
+				printf("mpu_dmp_get_data() Data for success\n");//串口1 输出数据获取成功 
+			  break;
+			}
+						
+			if(i == 20-1 )//i已经等于(20-1)次 还没有退出循环说明 说明输出读取失败
+			{
+				printf("mpu_dmp_get_data()  Data acquisition failure\n");//串口1 输出数据获取失败 
+		}
+			
+			g_fMPU6050YawMovePidOut = PID_realize(&pidMPU6050YawMovement,yaw);//PID计算输出目标速度 这个速度，会和基础速度加减
+
+			g_fMPU6050YawMovePidOut1 = 1.5 + g_fMPU6050YawMovePidOut;//基础速度加减PID输出速度
+			g_fMPU6050YawMovePidOut2 = 1.5 - g_fMPU6050YawMovePidOut;
+			if(g_fMPU6050YawMovePidOut1 >3.5) g_fMPU6050YawMovePidOut1 =3.5;//进行限幅
+			if(g_fMPU6050YawMovePidOut1 <0) g_fMPU6050YawMovePidOut1 =0;
+			if(g_fMPU6050YawMovePidOut2 >3.5) g_fMPU6050YawMovePidOut2 =3.5;//进行限幅
+			if(g_fMPU6050YawMovePidOut2 <0) g_fMPU6050YawMovePidOut2 =0;
+			motorPidSetSpeed(g_fMPU6050YawMovePidOut1,g_fMPU6050YawMovePidOut2);//将最后计算的目标速度 通过motorPidSetSpeed控制电机
+		
+		}
+		
+
+		}
+    osDelay(1);
+  }
+  /* USER CODE END StartMultiModeTask */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+
+/* USER CODE END Application */
+
