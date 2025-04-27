@@ -130,6 +130,16 @@ float adcGetBatteryVoltage(void)
 
 
 
+uint8_t adcGetBatteryLevel(void)
+{
+    float voltage = adcGetBatteryVoltage();
+    if(voltage < 0) return 0; 
+    
 
+    if(voltage < 10.5) return 0;       
+    else if(voltage < 11.2) return 1;   
+    else if(voltage < 11.9) return 2;  
+    else return 3;                      
+}
 
 /* USER CODE END 1 */
