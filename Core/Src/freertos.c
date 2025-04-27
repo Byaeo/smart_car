@@ -285,7 +285,7 @@ void StartOledTask(void const * argument)
     HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);
 
 
-    //0LEDÏÔÊ¾¹¦ÄÜ
+    //0LEDï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½
     sprintf((char*)OledString, "V1:%.2fV2:%.2f", Motor1Speed,Motor2Speed);
     OLED_ShowString(0,0,OledString,12);
 
@@ -295,16 +295,33 @@ void StartOledTask(void const * argument)
     sprintf((char*)OledString, "U:%.2fV", adcGetBatteryVoltage());
     OLED_ShowString(0,2,OledString,12);
 
+   
+    uint8_t batteryLevel = adcGetBatteryLevel();
+    switch(batteryLevel) {
+        case 0:
+            OLED_ShowString(0,3,"Battery: LOW!",12);
+            break;
+        case 1:
+            OLED_ShowString(0,3,"Battery: 25%",12);
+            break;
+        case 2:
+            OLED_ShowString(0,3,"Battery: 50%",12);
+            break;
+        case 3:
+            OLED_ShowString(0,3,"Battery: 75%",12);
+            break;
+    }
+
     sprintf((char *)OledString,"HC_SR04:%.2fcm\r\n",HC_SR04_Read());
-    OLED_ShowString(0,3,OledString,12);
+    OLED_ShowString(0,4,OledString,12);
 
     sprintf((char *)OledString,"p:%.2f r:%.2f \r\n",pitch,roll);
-    OLED_ShowString(0,4,OledString,12);
+    OLED_ShowString(0,5,OledString,12);
 
     sprintf((char *)OledString,"y:%.2f  \r\n",yaw);
     OLED_ShowString(0,5,OledString,12);
 
-    //À¶ÑÀAPPÏÔÊ¾
+    //ï¿½ï¿½ï¿½ï¿½APPï¿½ï¿½Ê¾
     sprintf((char*)Usart3String, "V1:%.2fV2:%.2f", Motor1Speed,Motor2Speed);
     HAL_UART_Transmit(&huart3,( uint8_t *)Usart3String,strlen(( const  char  *)Usart3String),50);
  
@@ -368,7 +385,7 @@ void StartMultiModeTask(void const * argument)
 
     if(readMode == 1)
     {
-      //ºìÍâPIDÑ­¼£
+      //ï¿½ï¿½ï¿½ï¿½PIDÑ­ï¿½ï¿½
       g_ucaHW_Read[0] = READ_HW_OUT_1;
       g_ucaHW_Read[1] = READ_HW_OUT_2;
       g_ucaHW_Read[2] = READ_HW_OUT_3;
@@ -428,7 +445,7 @@ void StartMultiModeTask(void const * argument)
  
     if(readMode == 2)
     {
-      //±ÜÕÏÂß¼­
+      //ï¿½ï¿½ï¿½ï¿½ï¿½ß¼ï¿½
       if(HC_SR04_Read() > 25)
       {
         motorPidSetSpeed(1,1);
